@@ -1,1 +1,325 @@
-PLACEHOLDER
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Mafia Game</title>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+body { background: linear-gradient(135deg, #1a1a2e, #16213e); color: #eee; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 10px; }
+.container { width: 100%; max-width: 500px; background: rgba(0,0,0,0.6); border-radius: 15px; padding: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+h1 { text-align: center; margin-bottom: 20px; color: #e94560; }
+input, button, select { width: 100%; padding: 12px; margin: 8px 0; border: none; border-radius: 8px; font-size: 16px; }
+input { background: #0f3460; color: white; }
+button { background: #e94560; color: white; cursor: pointer; font-weight: bold; transition: 0.3s; }
+button:hover { background: #ff6b81; }
+button:disabled { background: #555; cursor: not-allowed; }
+.hidden { display: none !important; }
+#lobby, #game { width: 100%; }
+.player-list { max-height: 200px; overflow-y: auto; background: rgba(255,255,255,0.1); border-radius: 8px; padding: 10px; margin: 10px 0; }
+.player { padding: 8px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; }
+.ready { color: #4caf50; }
+#chat { height: 250px; overflow-y: auto; background: rgba(0,0,0,0.5); border-radius: 8px; padding: 10px; margin: 10px 0; }
+.msg { margin: 5px 0; padding: 5px; border-radius: 5px; background: rgba(255,255,255,0.1); }
+#flash-card { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 1000; animation: flash 0.5s; }
+.card { background: linear-gradient(145deg, #0f3460, #16213e); border: 3px solid #e94560; border-radius: 20px; padding: 40px; text-align: center; width: 80%; max-width: 350px; box-shadow: 0 0 30px #e94560; }
+.card h2 { font-size: 2em; margin-bottom: 20px; color: #fff; }
+.card .role { font-size: 2.5em; font-weight: bold; color: #e94560; text-transform: uppercase; }
+@keyframes flash { 0% { opacity: 0; transform: scale(0.8); } 100% { opacity: 1; transform: scale(1); } }
+#votes { margin: 10px 0; }
+.vote-item { display: flex; justify-content: space-between; align-items: center; padding: 5px; }
+#room-id { background: #0f3460; padding: 10px; border-radius: 8px; text-align: center; font-weight: bold; word-break: break-all; margin: 10px 0; }
+.status { text-align: center; margin: 10px 0; color: #aaa; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Mafia Game</h1>
+  
+  <!-- Login -->
+  <div id="login">
+    <input type="text" id="username" placeholder="Enter your username" maxlength="15">
+    <button onclick="setUsername()">Continue</button>
+  </div>
+
+  <!-- Mode -->
+  <div id="mode" class="hidden">
+    <button onclick="createRoom()">Host a Game</button>
+    <hr style="margin: 15px 0; border-color: #333;">
+    <input type="text" id="join-id" placeholder="Enter Host's Room ID">
+    <button onclick="joinRoom()">Join Game</button>
+  </div>
+
+  <!-- Lobby -->
+  <div id="lobby" class="hidden">
+    <div class="status" id="lobby-status">Waiting for players...</div>
+    <div id="room-id-display" class="hidden">
+      <p>Share this Room ID with friends:</p>
+      <div id="room-id"></div>
+    </div>
+    <div class="player-list" id="player-list"></div>
+    <button id="ready-btn" onclick="toggleReady()">Click Start (Ready)</button>
+    <p class="status" id="ready-count">0 ready</p>
+    <button id="start-game-btn" class="hidden" onclick="startGame()" disabled>Start Game (Host only)</button>
+  </div>
+
+  <!-- Game -->
+  <div id="game" class="hidden">
+    <div class="status">Discuss and vote for who you think is Mafia!</div>
+    <div id="chat"></div>
+    <input type="text" id="chat-input" placeholder="Type a message..." onkeypress="if(event.key==='Enter') sendChat()">
+    <button onclick="sendChat()">Send</button>
+    <hr style="margin: 15px 0; border-color: #333;">
+    <h3>Vote for Mafia</h3>
+    <div id="vote-list" class="player-list"></div>
+    <button onclick="submitVote()">Submit Vote</button>
+    <div id="vote-results" class="status"></div>
+  </div>
+</div>
+
+<!-- Flash Card -->
+<div id="flash-card" class="hidden">
+  <div class="card">
+    <h2 id="card-name"></h2>
+    <div class="role" id="card-role"></div>
+    <button onclick="closeCard()" style="margin-top: 20px;">Got it!</button>
+  </div>
+</div>
+
+<script>
+let peer, myId, myName, isHost = false, players = [], myRole = null, votes = {}, myVote = null, connections = {};
+let gameStarted = false;
+
+function setUsername() {
+  myName = document.getElementById('username').value.trim();
+  if (!myName) return alert('Please enter a username');
+  document.getElementById('login').classList.add('hidden');
+  document.getElementById('mode').classList.remove('hidden');
+}
+
+function createRoom() {
+  isHost = true;
+  peer = new Peer();
+  peer.on('open', id => {
+    myId = id;
+    document.getElementById('room-id').textContent = id;
+    document.getElementById('room-id-display').classList.remove('hidden');
+    document.getElementById('mode').classList.add('hidden');
+    document.getElementById('lobby').classList.remove('hidden');
+    addPlayer({ id: myId, name: myName, ready: false, role: null, isHost: true });
+    updateLobby();
+    peer.on('connection', conn => {
+      conn.on('open', () => {
+        connections[conn.peer] = conn;
+        conn.on('data', data => handleData(data, conn));
+        conn.on('close', () => removePlayer(conn.peer));
+      });
+    });
+  });
+  peer.on('error', err => alert('Connection error: ' + err));
+}
+
+function joinRoom() {
+  const hostId = document.getElementById('join-id').value.trim();
+  if (!hostId) return alert('Enter Room ID');
+  isHost = false;
+  peer = new Peer();
+  peer.on('open', id => {
+    myId = id;
+    const conn = peer.connect(hostId);
+    conn.on('open', () => {
+      connections[hostId] = conn;
+      document.getElementById('mode').classList.add('hidden');
+      document.getElementById('lobby').classList.remove('hidden');
+      conn.send({ type: 'join', id: myId, name: myName });
+      conn.on('data', data => handleData(data, conn));
+      conn.on('close', () => { alert('Host disconnected'); location.reload(); });
+    });
+  });
+  peer.on('error', err => alert('Connection error: ' + err));
+}
+
+function addPlayer(p) {
+  if (!players.find(x => x.id === p.id)) players.push(p);
+  updateLobby();
+  if (isHost) broadcast({ type: 'players', players: players.map(({id,name,ready}) => ({id,name,ready})) });
+}
+
+function removePlayer(id) {
+  players = players.filter(p => p.id !== id);
+  delete connections[id];
+  updateLobby();
+  if (isHost) broadcast({ type: 'players', players: players.map(({id,name,ready}) => ({id,name,ready})) });
+}
+
+function updateLobby() {
+  const list = document.getElementById('player-list');
+  list.innerHTML = players.map(p => `<div class="player">${p.name} ${p.ready ? '<span class="ready">✓ Ready</span>' : ''}</div>`).join('');
+  const readyCount = players.filter(p => p.ready).length;
+  document.getElementById('ready-count').textContent = `${readyCount} / ${players.length} ready`;
+  const canStart = players.length >= 5 && players.length <= 10 && readyCount === players.length;
+  if (isHost) {
+    document.getElementById('start-game-btn').classList.remove('hidden');
+    document.getElementById('start-game-btn').disabled = !canStart;
+  }
+  document.getElementById('lobby-status').textContent = players.length < 5 ? `Need at least 5 players (${players.length}/5)` : `Players: ${players.length}/10`;
+}
+
+function toggleReady() {
+  const me = players.find(p => p.id === myId);
+  if (!me) return;
+  me.ready = !me.ready;
+  document.getElementById('ready-btn').textContent = me.ready ? 'Unready' : 'Click Start (Ready)';
+  if (isHost) {
+    updateLobby();
+  } else {
+    Object.values(connections)[0].send({ type: 'ready', id: myId, ready: me.ready });
+  }
+}
+
+function startGame() {
+  if (!isHost) return;
+  // Assign roles
+  const roles = ['Mafia', 'Mafia', 'Savior'];
+  while (roles.length < players.length) roles.push('Citizen');
+  // Shuffle
+  for (let i = roles.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [roles[i], roles[j]] = [roles[j], roles[i]];
+  }
+  players.forEach((p, i) => {
+    p.role = roles[i];
+    if (p.id === myId) {
+      myRole = p.role;
+      showFlashCard(myName, myRole);
+    } else {
+      connections[p.id].send({ type: 'role', role: p.role, name: p.name });
+    }
+  });
+  gameStarted = true;
+  broadcast({ type: 'game_start' });
+  document.getElementById('lobby').classList.add('hidden');
+  document.getElementById('game').classList.remove('hidden');
+  updateVoteList();
+}
+
+function showFlashCard(name, role) {
+  document.getElementById('card-name').textContent = name;
+  document.getElementById('card-role').textContent = role;
+  document.getElementById('flash-card').classList.remove('hidden');
+}
+
+function closeCard() {
+  document.getElementById('flash-card').classList.add('hidden');
+}
+
+function handleData(data, conn) {
+  if (data.type === 'join' && isHost) {
+    if (players.length >= 10) {
+      conn.send({ type: 'error', msg: 'Room full (max 10)' });
+      conn.close();
+      return;
+    }
+    if (players.find(p => p.name.toLowerCase() === data.name.toLowerCase())) {
+      conn.send({ type: 'error', msg: 'Username taken' });
+      conn.close();
+      return;
+    }
+    addPlayer({ id: data.id, name: data.name, ready: false, role: null });
+  } else if (data.type === 'ready' && isHost) {
+    const p = players.find(x => x.id === data.id);
+    if (p) { p.ready = data.ready; updateLobby(); }
+  } else if (data.type === 'players') {
+    players = data.players.map(p => ({ ...p, role: null }));
+    // Add self if missing
+    if (!players.find(p => p.id === myId)) players.push({ id: myId, name: myName, ready: false });
+    updateLobby();
+  } else if (data.type === 'role') {
+    myRole = data.role;
+    showFlashCard(data.name, data.role);
+  } else if (data.type === 'game_start') {
+    document.getElementById('lobby').classList.add('hidden');
+    document.getElementById('game').classList.remove('hidden');
+    updateVoteList();
+  } else if (data.type === 'chat') {
+    addChat(data.name, data.text);
+  } else if (data.type === 'vote' && isHost) {
+    votes[data.id] = data.target;
+    broadcast({ type: 'vote_update', votes });
+    checkVotes();
+  } else if (data.type === 'vote_update') {
+    votes = data.votes;
+    updateVoteResults();
+  } else if (data.type === 'error') {
+    alert(data.msg);
+    location.reload();
+  }
+}
+
+function broadcast(msg) {
+  Object.values(connections).forEach(c => { try { c.send(msg); } catch(e){} });
+}
+
+function sendChat() {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  addChat(myName, text);
+  const msg = { type: 'chat', name: myName, text };
+  if (isHost) broadcast(msg);
+  else Object.values(connections)[0].send(msg);
+  input.value = '';
+}
+
+function addChat(name, text) {
+  const chat = document.getElementById('chat');
+  chat.innerHTML += `<div class="msg"><b>${name}:</b> ${text}</div>`;
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function updateVoteList() {
+  const list = document.getElementById('vote-list');
+  list.innerHTML = players.map(p => `
+    <div class="vote-item">
+      <span>${p.name}</span>
+      <button onclick="selectVote('${p.id}')" ${myVote === p.id ? 'disabled' : ''}>Vote</button>
+    </div>
+  `).join('');
+}
+
+function selectVote(targetId) {
+  myVote = targetId;
+  updateVoteList();
+}
+
+function submitVote() {
+  if (!myVote) return alert('Select someone first');
+  if (isHost) {
+    votes[myId] = myVote;
+    broadcast({ type: 'vote_update', votes });
+    checkVotes();
+  } else {
+    Object.values(connections)[0].send({ type: 'vote', id: myId, target: myVote });
+  }
+  alert('Vote submitted!');
+}
+
+function checkVotes() {
+  if (Object.keys(votes).length === players.length) {
+    const counts = {};
+    Object.values(votes).forEach(t => counts[t] = (counts[t] || 0) + 1);
+    const sorted = Object.entries(counts).sort((a,b) => b[1] - a[1]);
+    const winner = players.find(p => p.id === sorted[0][0]);
+    const result = `Most voted: ${winner ? winner.name : 'None'} (${sorted[0][1]} votes)`;
+    broadcast({ type: 'vote_result', result });
+    document.getElementById('vote-results').textContent = result;
+  }
+}
+
+function updateVoteResults() {
+  // Optional: show current votes if wanted, but keep simple
+}
+</script>
+</body>
+</html>
