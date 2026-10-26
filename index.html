@@ -143,14 +143,12 @@ function joinRoom() {
 function addPlayer(p) {
   if (!players.find(x => x.id === p.id)) players.push(p);
   updateLobby();
-  if (isHost) broadcast({ type: 'players', players: players.map(({id,name,ready}) => ({id,name,ready})) });
 }
 
 function removePlayer(id) {
   players = players.filter(p => p.id !== id);
   delete connections[id];
   updateLobby();
-  if (isHost) broadcast({ type: 'players', players: players.map(({id,name,ready}) => ({id,name,ready})) });
 }
 
 function updateLobby() {
@@ -162,6 +160,7 @@ function updateLobby() {
   if (isHost) {
     document.getElementById('start-game-btn').classList.remove('hidden');
     document.getElementById('start-game-btn').disabled = !canStart;
+    broadcast({ type: 'players', players: players.map(({id,name,ready}) => ({id,name,ready})) });
   }
   document.getElementById('lobby-status').textContent = players.length < 5 ? `Need at least 5 players (${players.length}/5)` : `Players: ${players.length}/10`;
 }
@@ -194,7 +193,7 @@ function startGame() {
       myRole = p.role;
       showFlashCard(myName, myRole);
     } else {
-      connections[p.id].send({ type: 'role', role: p.role, name: p.name });
+      if (connections[p.id]) connections[p.id].send({ type: 'role', role: p.role, name: p.name });
     }
   });
   gameStarted = true;
@@ -232,7 +231,6 @@ function handleData(data, conn) {
     if (p) { p.ready = data.ready; updateLobby(); }
   } else if (data.type === 'players') {
     players = data.players.map(p => ({ ...p, role: null }));
-    // Add self if missing
     if (!players.find(p => p.id === myId)) players.push({ id: myId, name: myName, ready: false });
     updateLobby();
   } else if (data.type === 'role') {
@@ -244,6 +242,7 @@ function handleData(data, conn) {
     updateVoteList();
   } else if (data.type === 'chat') {
     addChat(data.name, data.text);
+    if (isHost) broadcast(data);
   } else if (data.type === 'vote' && isHost) {
     votes[data.id] = data.target;
     broadcast({ type: 'vote_update', votes });
@@ -251,6 +250,8 @@ function handleData(data, conn) {
   } else if (data.type === 'vote_update') {
     votes = data.votes;
     updateVoteResults();
+  } else if (data.type === 'vote_result') {
+    document.getElementById('vote-results').textContent = data.result;
   } else if (data.type === 'error') {
     alert(data.msg);
     location.reload();
@@ -265,8 +266,8 @@ function sendChat() {
   const input = document.getElementById('chat-input');
   const text = input.value.trim();
   if (!text) return;
-  addChat(myName, text);
   const msg = { type: 'chat', name: myName, text };
+  addChat(myName, text);
   if (isHost) broadcast(msg);
   else Object.values(connections)[0].send(msg);
   input.value = '';
@@ -318,7 +319,7 @@ function checkVotes() {
 }
 
 function updateVoteResults() {
-  // Optional: show current votes if wanted, but keep simple
+  // Could show live votes here if desired
 }
 </script>
 </body>
