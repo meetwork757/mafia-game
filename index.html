@@ -1,1 +1,562 @@
-PLACEHOLDER
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Mafia Game</title>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.5/dist/peerjs.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+body { background: linear-gradient(135deg, #1a1a2e, #16213e); color: #eee; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 10px; }
+.container { width: 100%; max-width: 500px; background: rgba(0,0,0,0.6); border-radius: 15px; padding: 20px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+h1 { text-align: center; margin-bottom: 20px; color: #e94560; }
+input, button, select { width: 100%; padding: 12px; margin: 8px 0; border: none; border-radius: 8px; font-size: 16px; }
+input { background: #0f3460; color: white; }
+button { background: #e94560; color: white; cursor: pointer; font-weight: bold; transition: 0.3s; }
+button:hover { background: #ff6b81; }
+button:disabled { background: #555; cursor: not-allowed; }
+.hidden { display: none !important; }
+#lobby, #game, #night { width: 100%; }
+.player-list { max-height: 200px; overflow-y: auto; background: rgba(255,255,255,0.1); border-radius: 8px; padding: 10px; margin: 10px 0; }
+.player { padding: 8px; border-bottom: 1px solid #333; display: flex; justify-content: space-between; }
+.ready { color: #4caf50; }
+#chat { height: 250px; overflow-y: auto; background: rgba(0,0,0,0.5); border-radius: 8px; padding: 10px; margin: 10px 0; }
+.msg { margin: 5px 0; padding: 5px; border-radius: 5px; background: rgba(255,255,255,0.1); }
+#flash-card { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 1000; animation: flash 0.5s; }
+.card { background: linear-gradient(145deg, #0f3460, #16213e); border: 3px solid #e94560; border-radius: 20px; padding: 40px; text-align: center; width: 80%; max-width: 350px; box-shadow: 0 0 30px #e94560; }
+.card h2 { font-size: 2em; margin-bottom: 20px; color: #fff; }
+.card .role { font-size: 2.5em; font-weight: bold; color: #e94560; text-transform: uppercase; }
+@keyframes flash { 0% { opacity: 0; transform: scale(0.8); } 100% { opacity: 1; transform: scale(1); } }
+#votes { margin: 10px 0; }
+.vote-item { display: flex; justify-content: space-between; align-items: center; padding: 5px; }
+#room-id { background: #0f3460; padding: 10px; border-radius: 8px; text-align: center; font-weight: bold; word-break: break-all; margin: 10px 0; }
+.status { text-align: center; margin: 10px 0; color: #aaa; }
+.dead, .spectator { text-decoration: line-through; opacity: 0.6; }
+.spectator-banner { background: #333; color: #ff6b81; padding: 10px; border-radius: 8px; text-align: center; margin: 10px 0; font-weight: bold; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Mafia Game</h1>
+  
+  <!-- Login -->
+  <div id="login">
+    <input type="text" id="username" placeholder="Enter your username" maxlength="15">
+    <button onclick="setUsername()">Continue</button>
+  </div>
+
+  <!-- Mode -->
+  <div id="mode" class="hidden">
+    <h3 style="text-align:center; margin-bottom:10px;">Host a Game</h3>
+    <input type="text" id="custom-room-id" placeholder="Create your Room ID (e.g. MyGame123)" maxlength="20">
+    <button onclick="createRoom()">Create Room</button>
+    <hr style="margin: 15px 0; border-color: #333;">
+    <h3 style="text-align:center; margin-bottom:10px;">Join a Game</h3>
+    <input type="text" id="join-id" placeholder="Enter Host's Room ID">
+    <button onclick="joinRoom()">Join Game</button>
+  </div>
+
+  <!-- Lobby -->
+  <div id="lobby" class="hidden">
+    <div class="status" id="lobby-status">Waiting for players...</div>
+    <div id="room-id-display" class="hidden">
+      <p>Share this Room ID with friends:</p>
+      <div id="room-id"></div>
+    </div>
+    <div class="player-list" id="player-list"></div>
+    <button id="ready-btn" onclick="toggleReady()">Click Start (Ready)</button>
+    <p class="status" id="ready-count">0 ready</p>
+    <button id="start-game-btn" class="hidden" onclick="startGame()" disabled>Start Game (Host only)</button>
+  </div>
+
+  <!-- Night Phase -->
+  <div id="night" class="hidden">
+    <div class="status" id="night-status">Night Phase...</div>
+    <div id="spectator-night" class="spectator-banner hidden">You are a spectator. Waiting for next round...</div>
+    <div id="mafia-action" class="hidden">
+      <h3>Mafia: Choose someone to kill</h3>
+      <div id="kill-list" class="player-list"></div>
+      <button id="kill-btn" onclick="submitKill()" disabled>Confirm Kill</button>
+    </div>
+    <div id="savior-action" class="hidden">
+      <h3>Savior: Choose someone to protect</h3>
+      <div id="protect-list" class="player-list"></div>
+      <button id="protect-btn" onclick="submitProtect()" disabled>Confirm Protect</button>
+    </div>
+    <div id="waiting-night" class="status">Waiting for night actions...</div>
+  </div>
+
+  <!-- Game (Day Phase) -->
+  <div id="game" class="hidden">
+    <div class="status" id="day-status">Day Phase - Discuss and vote for who you think is Mafia!</div>
+    <div id="spectator-day" class="spectator-banner hidden">You are a spectator until the next round.</div>
+    <div id="night-result" class="status"></div>
+    <div id="chat"></div>
+    <input type="text" id="chat-input" placeholder="Type a message..." onkeypress="if(event.key==='Enter') sendChat()">
+    <button id="chat-btn" onclick="sendChat()">Send</button>
+    <hr style="margin: 15px 0; border-color: #333;">
+    <h3>Vote for Mafia</h3>
+    <div id="vote-list" class="player-list"></div>
+    <button id="vote-btn" onclick="submitVote()">Submit Vote</button>
+    <div id="vote-results" class="status"></div>
+    <button id="next-round-btn" class="hidden" onclick="startNextRound()">Start Next Round (Host)</button>
+  </div>
+</div>
+
+<!-- Flash Card -->
+<div id="flash-card" class="hidden">
+  <div class="card">
+    <h2 id="card-name"></h2>
+    <div class="role" id="card-role"></div>
+    <button onclick="closeCard()" style="margin-top: 20px;">Got it!</button>
+  </div>
+</div>
+
+<script>
+let peer, myId, myName, isHost = false, players = [], myRole = null, votes = {}, myVote = null, connections = {};
+let gameStarted = false;
+let phase = 'lobby';
+let mafiaKills = {};
+let saviorProtect = null;
+let myKillTarget = null;
+let myProtectTarget = null;
+let eliminated = [];
+
+function setUsername() {
+  myName = document.getElementById('username').value.trim();
+  if (!myName) return alert('Please enter a username');
+  document.getElementById('login').classList.add('hidden');
+  document.getElementById('mode').classList.remove('hidden');
+}
+
+function createRoom() {
+  const customId = document.getElementById('custom-room-id').value.trim();
+  if (!customId) return alert('Please enter a Room ID');
+  if (!/^[a-zA-Z0-9_-]+$/.test(customId)) return alert('Room ID can only contain letters, numbers, - and _');
+  isHost = true;
+  peer = new Peer(customId);
+  peer.on('open', id => {
+    myId = id;
+    document.getElementById('room-id').textContent = id;
+    document.getElementById('room-id-display').classList.remove('hidden');
+    document.getElementById('mode').classList.add('hidden');
+    document.getElementById('lobby').classList.remove('hidden');
+    addPlayer({ id: myId, name: myName, ready: false, role: null, isHost: true });
+    updateLobby();
+    peer.on('connection', conn => {
+      conn.on('open', () => {
+        connections[conn.peer] = conn;
+        conn.on('data', data => handleData(data, conn));
+        conn.on('close', () => removePlayer(conn.peer));
+      });
+    });
+  });
+  peer.on('error', err => {
+    if (err.type === 'unavailable-id') {
+      alert('This Room ID is already taken. Please choose another one.');
+    } else {
+      alert('Connection error: ' + err);
+    }
+  });
+}
+
+function joinRoom() {
+  const hostId = document.getElementById('join-id').value.trim();
+  if (!hostId) return alert('Enter Room ID');
+  isHost = false;
+  peer = new Peer();
+  peer.on('open', id => {
+    myId = id;
+    const conn = peer.connect(hostId);
+    conn.on('open', () => {
+      connections[hostId] = conn;
+      document.getElementById('mode').classList.add('hidden');
+      document.getElementById('lobby').classList.remove('hidden');
+      conn.send({ type: 'join', id: myId, name: myName });
+      conn.on('data', data => handleData(data, conn));
+      conn.on('close', () => { alert('Host disconnected'); location.reload(); });
+    });
+    conn.on('error', () => alert('Could not connect to that Room ID. Check the ID and try again.'));
+  });
+  peer.on('error', err => alert('Connection error: ' + err));
+}
+
+function addPlayer(p) {
+  if (!players.find(x => x.id === p.id)) players.push(p);
+  updateLobby();
+}
+
+function removePlayer(id) {
+  players = players.filter(p => p.id !== id);
+  delete connections[id];
+  updateLobby();
+}
+
+function updateLobby() {
+  const list = document.getElementById('player-list');
+  list.innerHTML = players.map(p => `<div class="player">${p.name} ${p.ready ? '<span class="ready">✓ Ready</span>' : ''}</div>`).join('');
+  const readyCount = players.filter(p => p.ready).length;
+  document.getElementById('ready-count').textContent = `${readyCount} / ${players.length} ready`;
+  const canStart = players.length >= 3 && players.length <= 10 && readyCount === players.length;
+  if (isHost) {
+    document.getElementById('start-game-btn').classList.remove('hidden');
+    document.getElementById('start-game-btn').disabled = !canStart;
+    broadcast({ type: 'players', players: players.map(({id,name,ready}) => ({id,name,ready})) });
+  }
+  document.getElementById('lobby-status').textContent = players.length < 3 ? `Need at least 3 players (${players.length}/3)` : `Players: ${players.length}/10`;
+}
+
+function toggleReady() {
+  const me = players.find(p => p.id === myId);
+  if (!me) return;
+  me.ready = !me.ready;
+  document.getElementById('ready-btn').textContent = me.ready ? 'Unready' : 'Click Start (Ready)';
+  if (isHost) {
+    updateLobby();
+  } else {
+    Object.values(connections)[0].send({ type: 'ready', id: myId, ready: me.ready });
+  }
+}
+
+function startGame() {
+  if (!isHost) return;
+  let roles = [];
+  if (players.length === 3) {
+    roles = ['Mafia', 'Savior', 'Citizen'];
+  } else {
+    roles = ['Mafia', 'Mafia', 'Savior'];
+    while (roles.length < players.length) roles.push('Citizen');
+  }
+  for (let i = roles.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [roles[i], roles[j]] = [roles[j], roles[i]];
+  }
+  players.forEach((p, i) => {
+    p.role = roles[i];
+    if (p.id === myId) {
+      myRole = p.role;
+      showFlashCard(myName, myRole);
+    } else {
+      if (connections[p.id]) connections[p.id].send({ type: 'role', role: p.role, name: p.name });
+    }
+  });
+  gameStarted = true;
+  eliminated = [];
+  broadcast({ type: 'game_start' });
+  document.getElementById('lobby').classList.add('hidden');
+}
+
+function showFlashCard(name, role) {
+  document.getElementById('card-name').textContent = name;
+  document.getElementById('card-role').textContent = role;
+  document.getElementById('flash-card').classList.remove('hidden');
+}
+
+function closeCard() {
+  document.getElementById('flash-card').classList.add('hidden');
+  if (isHost && phase !== 'night') {
+    startNight();
+  }
+}
+
+function startNight() {
+  phase = 'night';
+  mafiaKills = {};
+  saviorProtect = null;
+  myKillTarget = null;
+  myProtectTarget = null;
+  broadcast({ type: 'night_start', eliminated });
+  showNightUI();
+}
+
+function showNightUI() {
+  document.getElementById('night').classList.remove('hidden');
+  document.getElementById('game').classList.add('hidden');
+  document.getElementById('lobby').classList.add('hidden');
+  
+  const isSpectator = eliminated.includes(myId);
+  document.getElementById('spectator-night').classList.toggle('hidden', !isSpectator);
+  
+  if (isSpectator) {
+    document.getElementById('mafia-action').classList.add('hidden');
+    document.getElementById('savior-action').classList.add('hidden');
+    document.getElementById('waiting-night').classList.remove('hidden');
+    document.getElementById('night-status').textContent = 'Night has fallen (you are spectating)';
+    return;
+  }
+
+  if (myRole === 'Mafia') {
+    document.getElementById('mafia-action').classList.remove('hidden');
+    document.getElementById('waiting-night').classList.add('hidden');
+    updateKillList();
+  } else if (myRole === 'Savior') {
+    document.getElementById('savior-action').classList.remove('hidden');
+    document.getElementById('waiting-night').classList.add('hidden');
+    updateProtectList();
+  } else {
+    document.getElementById('night-status').textContent = 'Night has fallen. Mafia is choosing a victim...';
+    document.getElementById('waiting-night').classList.remove('hidden');
+  }
+}
+
+function getAlive() {
+  return players.filter(p => !eliminated.includes(p.id));
+}
+
+function updateKillList() {
+  const list = document.getElementById('kill-list');
+  const alive = getAlive();
+  list.innerHTML = alive.map(p => `
+    <div class="vote-item">
+      <span>${p.name}</span>
+      <button onclick="selectKill('${p.id}')" ${myKillTarget === p.id ? 'disabled' : ''}>Kill</button>
+    </div>
+  `).join('');
+  document.getElementById('kill-btn').disabled = !myKillTarget;
+}
+
+function selectKill(targetId) {
+  if (eliminated.includes(myId)) return;
+  myKillTarget = targetId;
+  updateKillList();
+}
+
+function submitKill() {
+  if (!myKillTarget || eliminated.includes(myId)) return;
+  if (isHost) {
+    mafiaKills[myId] = myKillTarget;
+    checkNightActions();
+  } else {
+    Object.values(connections)[0].send({ type: 'mafia_kill', id: myId, target: myKillTarget });
+  }
+  document.getElementById('kill-btn').disabled = true;
+  document.getElementById('kill-btn').textContent = 'Kill submitted';
+}
+
+function updateProtectList() {
+  const list = document.getElementById('protect-list');
+  const alive = getAlive();
+  list.innerHTML = alive.map(p => `
+    <div class="vote-item">
+      <span>${p.name}</span>
+      <button onclick="selectProtect('${p.id}')" ${myProtectTarget === p.id ? 'disabled' : ''}>Protect</button>
+    </div>
+  `).join('');
+  document.getElementById('protect-btn').disabled = !myProtectTarget;
+}
+
+function selectProtect(targetId) {
+  if (eliminated.includes(myId)) return;
+  myProtectTarget = targetId;
+  updateProtectList();
+}
+
+function submitProtect() {
+  if (!myProtectTarget || eliminated.includes(myId)) return;
+  if (isHost) {
+    saviorProtect = myProtectTarget;
+    checkNightActions();
+  } else {
+    Object.values(connections)[0].send({ type: 'savior_protect', id: myId, target: myProtectTarget });
+  }
+  document.getElementById('protect-btn').disabled = true;
+  document.getElementById('protect-btn').textContent = 'Protect submitted';
+}
+
+function checkNightActions() {
+  if (!isHost) return;
+  const mafiaPlayers = players.filter(p => p.role === 'Mafia' && !eliminated.includes(p.id));
+  const allMafiaChosen = mafiaPlayers.length === 0 || mafiaPlayers.every(m => mafiaKills[m.id]);
+  const hasSavior = players.some(p => p.role === 'Savior' && !eliminated.includes(p.id));
+  const saviorChosen = !hasSavior || saviorProtect !== null;
+  
+  if (allMafiaChosen && saviorChosen) {
+    const killCounts = {};
+    Object.values(mafiaKills).forEach(t => killCounts[t] = (killCounts[t] || 0) + 1);
+    let killTarget = null;
+    let max = 0;
+    for (const [t, c] of Object.entries(killCounts)) {
+      if (c > max) { max = c; killTarget = t; }
+    }
+    let resultMsg = 'No one was killed tonight.';
+    if (killTarget && killTarget !== saviorProtect && !eliminated.includes(killTarget)) {
+      const victim = players.find(p => p.id === killTarget);
+      if (victim) {
+        eliminated.push(killTarget);
+        resultMsg = `${victim.name} was killed by the Mafia! (now spectator)`;
+      }
+    } else if (killTarget && killTarget === saviorProtect) {
+      resultMsg = 'The Savior protected the target. No one died.';
+    }
+    broadcast({ type: 'night_result', result: resultMsg, eliminated });
+    showDayPhase(resultMsg);
+  }
+}
+
+function showDayPhase(result) {
+  phase = 'day';
+  document.getElementById('night').classList.add('hidden');
+  document.getElementById('game').classList.remove('hidden');
+  document.getElementById('night-result').textContent = result;
+  document.getElementById('day-status').textContent = 'Day Phase - Discuss and vote for who you think is the Mafia!';
+  document.getElementById('next-round-btn').classList.add('hidden');
+  updateSpectatorUI();
+  updateVoteList();
+}
+
+function updateSpectatorUI() {
+  const isSpec = eliminated.includes(myId);
+  document.getElementById('spectator-day').classList.toggle('hidden', !isSpec);
+  document.getElementById('chat-input').disabled = isSpec;
+  document.getElementById('chat-btn').disabled = isSpec;
+  document.getElementById('vote-btn').disabled = isSpec;
+}
+
+function handleData(data, conn) {
+  if (data.type === 'join' && isHost) {
+    if (players.length >= 10) {
+      conn.send({ type: 'error', msg: 'Room full (max 10)' });
+      conn.close();
+      return;
+    }
+    if (players.find(p => p.name.toLowerCase() === data.name.toLowerCase())) {
+      conn.send({ type: 'error', msg: 'Username taken' });
+      conn.close();
+      return;
+    }
+    addPlayer({ id: data.id, name: data.name, ready: false, role: null });
+  } else if (data.type === 'ready' && isHost) {
+    const p = players.find(x => x.id === data.id);
+    if (p) { p.ready = data.ready; updateLobby(); }
+  } else if (data.type === 'players') {
+    players = data.players.map(p => ({ ...p, role: null }));
+    if (!players.find(p => p.id === myId)) players.push({ id: myId, name: myName, ready: false });
+    updateLobby();
+  } else if (data.type === 'role') {
+    myRole = data.role;
+    showFlashCard(data.name, data.role);
+  } else if (data.type === 'game_start') {
+    document.getElementById('lobby').classList.add('hidden');
+    eliminated = [];
+  } else if (data.type === 'night_start') {
+    eliminated = data.eliminated || eliminated;
+    showNightUI();
+  } else if (data.type === 'mafia_kill' && isHost) {
+    mafiaKills[data.id] = data.target;
+    checkNightActions();
+  } else if (data.type === 'savior_protect' && isHost) {
+    saviorProtect = data.target;
+    checkNightActions();
+  } else if (data.type === 'night_result') {
+    eliminated = data.eliminated || [];
+    showDayPhase(data.result);
+  } else if (data.type === 'chat') {
+    addChat(data.name, data.text);
+    if (isHost) broadcast(data);
+  } else if (data.type === 'vote' && isHost) {
+    if (!eliminated.includes(data.id)) {
+      votes[data.id] = data.target;
+      broadcast({ type: 'vote_update', votes });
+      checkVotes();
+    }
+  } else if (data.type === 'vote_update') {
+    votes = data.votes;
+  } else if (data.type === 'vote_result') {
+    document.getElementById('vote-results').textContent = data.result;
+    if (data.eliminated) eliminated = data.eliminated;
+    updateSpectatorUI();
+    if (isHost) document.getElementById('next-round-btn').classList.remove('hidden');
+  } else if (data.type === 'error') {
+    alert(data.msg);
+    location.reload();
+  }
+}
+
+function broadcast(msg) {
+  Object.values(connections).forEach(c => { try { c.send(msg); } catch(e){} });
+}
+
+function sendChat() {
+  if (eliminated.includes(myId)) return alert('Spectators cannot chat');
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  const msg = { type: 'chat', name: myName, text };
+  addChat(myName, text);
+  if (isHost) broadcast(msg);
+  else Object.values(connections)[0].send(msg);
+  input.value = '';
+}
+
+function addChat(name, text) {
+  const chat = document.getElementById('chat');
+  chat.innerHTML += `<div class="msg"><b>${name}:</b> ${text}</div>`;
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function updateVoteList() {
+  const list = document.getElementById('vote-list');
+  const alive = getAlive();
+  list.innerHTML = alive.map(p => `
+    <div class="vote-item">
+      <span>${p.name}</span>
+      <button onclick="selectVote('${p.id}')" ${myVote === p.id ? 'disabled' : ''}>Vote</button>
+    </div>
+  `).join('');
+}
+
+function selectVote(targetId) {
+  if (eliminated.includes(myId)) return;
+  myVote = targetId;
+  updateVoteList();
+}
+
+function submitVote() {
+  if (!myVote) return alert('Select someone first');
+  if (eliminated.includes(myId)) return alert('You are a spectator and cannot vote');
+  if (isHost) {
+    votes[myId] = myVote;
+    broadcast({ type: 'vote_update', votes });
+    checkVotes();
+  } else {
+    Object.values(connections)[0].send({ type: 'vote', id: myId, target: myVote });
+  }
+  alert('Vote submitted!');
+}
+
+function checkVotes() {
+  if (!isHost) return;
+  const alive = getAlive();
+  if (Object.keys(votes).length >= alive.length) {
+    const counts = {};
+    Object.values(votes).forEach(t => { if (!eliminated.includes(t)) counts[t] = (counts[t] || 0) + 1; });
+    const sorted = Object.entries(counts).sort((a,b) => b[1] - a[1]);
+    if (sorted.length > 0) {
+      const votedId = sorted[0][0];
+      const votedPlayer = players.find(p => p.id === votedId);
+      if (votedPlayer && !eliminated.includes(votedId)) {
+        eliminated.push(votedId);
+      }
+      const result = `Voted out: ${votedPlayer ? votedPlayer.name : 'None'} (${sorted[0][1]} votes) - now spectator`;
+      broadcast({ type: 'vote_result', result, eliminated });
+      document.getElementById('vote-results').textContent = result;
+      document.getElementById('next-round-btn').classList.remove('hidden');
+    }
+    votes = {};
+    myVote = null;
+  }
+}
+
+function startNextRound() {
+  if (!isHost) return;
+  votes = {};
+  myVote = null;
+  document.getElementById('next-round-btn').classList.add('hidden');
+  document.getElementById('vote-results').textContent = '';
+  startNight();
+}
+
+function updateVoteResults() {}
+</script>
+</body>
+</html>
